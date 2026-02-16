@@ -1,0 +1,23 @@
+[package]
+name = "rustmod-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core Modbus protocol types, encoders, and frame codecs for rust-mod."
+readme = "../../README.md"
+
+[dependencies]
+defmt = { version = "0.3", optional = true }
+serde = { version = "1", features = ["derive"], default-features = false, optional = true }
+
+[dev-dependencies]
+proptest = "=1.4.0"
+
+[features]
+default = ["std", "alloc"]
+std = []
+alloc = []
+serde = ["dep:serde"]
+defmt = ["dep:defmt"]
