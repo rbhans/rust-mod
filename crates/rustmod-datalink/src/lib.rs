@@ -1,10 +1,20 @@
 //! Async Modbus transport abstraction layer.
+//!
+//! This crate provides the [`DataLink`] trait that abstracts over TCP and RTU
+//! transports, along with concrete implementations:
+//!
+//! - [`ModbusTcpTransport`] — Modbus TCP client transport
+//! - [`ModbusTcpServer`] / [`ModbusRtuOverTcpServer`] — server implementations
+//! - [`InMemoryModbusService`] — in-memory simulator for testing
+//!
+//! Enable the `rtu` feature for serial RTU support via `tokio-serial`.
 
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
 use rustmod_core::encoding::{Reader, Writer};
 use rustmod_core::frame::tcp;
+pub use rustmod_core::UnitId;
 use rustmod_core::{DecodeError, EncodeError};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -29,26 +39,40 @@ pub use rtu_server::{ModbusRtuServer, ModbusRtuServerConfig};
 
 const MAX_TCP_PDU_LEN: usize = 253;
 
+/// Errors that can occur during a transport-level operation.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum DataLinkError {
+    /// Underlying I/O error (TCP socket, serial port, etc.).
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// Failed to encode a request frame.
     #[error("encode error: {0}")]
     Encode(#[from] EncodeError),
+    /// Failed to decode a response frame.
     #[error("decode error: {0}")]
     Decode(#[from] DecodeError),
+    /// The remote peer closed the connection.
     #[error("connection closed")]
     ConnectionClosed,
+    /// The request timed out waiting for a response.
     #[error("request timed out")]
     Timeout,
+    /// The response was structurally invalid.
     #[error("invalid response: {0}")]
     InvalidResponse(&'static str),
+    /// The response transaction ID did not match the request.
     #[error("transaction id mismatch: expected {expected}, got {got}")]
     MismatchedTransactionId { expected: u16, got: u16 },
+    /// The caller-provided response buffer was too small for the response PDU.
     #[error("response buffer too small (needed {needed}, available {available})")]
     ResponseBufferTooSmall { needed: usize, available: usize },
 }
 
+/// Async transport abstraction for Modbus request/response exchanges.
+///
+/// Implementations handle framing (TCP MBAP or RTU CRC) and wire I/O.
+/// The client crate uses this trait to remain transport-agnostic.
 #[async_trait]
 pub trait DataLink: Send + Sync {
     /// Send a request PDU to a unit and write the response PDU into `response_pdu`.
@@ -56,28 +80,60 @@ pub trait DataLink: Send + Sync {
     /// Returns the number of response bytes written to `response_pdu`.
     async fn exchange(
         &self,
-        unit_id: u8,
+        unit_id: UnitId,
         request_pdu: &[u8],
         response_pdu: &mut [u8],
     ) -> Result<usize, DataLinkError>;
+
+    /// Attempt to re-establish the underlying connection.
+    ///
+    /// Called by the client before retrying after a transport error.
+    /// The default implementation is a no-op (suitable for transports
+    /// that do not support reconnection or for mock implementations).
+    async fn reconnect(&self) -> Result<(), DataLinkError> {
+        Ok(())
+    }
+
+    /// Check if the transport is connected.
+    ///
+    /// The default implementation always returns `true`.
+    fn is_connected(&self) -> bool {
+        true
+    }
 }
 
+/// Modbus TCP client transport implementing the [`DataLink`] trait.
+///
+/// Uses MBAP framing with auto-incrementing transaction IDs. The transport
+/// is internally mutex-protected, so it can be shared behind an `Arc`.
 #[derive(Debug)]
 pub struct ModbusTcpTransport {
     stream: Arc<Mutex<TcpStream>>,
     next_transaction_id: Arc<AtomicU16>,
+    peer_addr: std::net::SocketAddr,
 }
 
 impl ModbusTcpTransport {
+    /// Connect to a Modbus TCP device (e.g. `"192.168.1.10:502"`).
     pub async fn connect<A: ToSocketAddrs>(addr: A) -> Result<Self, DataLinkError> {
         let stream = TcpStream::connect(addr).await?;
-        Ok(Self::from_stream(stream))
+        let peer_addr = stream.peer_addr()?;
+        Ok(Self {
+            stream: Arc::new(Mutex::new(stream)),
+            next_transaction_id: Arc::new(AtomicU16::new(1)),
+            peer_addr,
+        })
     }
 
+    /// Wrap an existing [`TcpStream`] as a Modbus TCP transport.
     pub fn from_stream(stream: TcpStream) -> Self {
+        let peer_addr = stream
+            .peer_addr()
+            .expect("TcpStream must have a peer address");
         Self {
             stream: Arc::new(Mutex::new(stream)),
             next_transaction_id: Arc::new(AtomicU16::new(1)),
+            peer_addr,
         }
     }
 
@@ -111,9 +167,17 @@ async fn drain_exact(stream: &mut TcpStream, mut len: usize) -> Result<(), DataL
 
 #[async_trait]
 impl DataLink for ModbusTcpTransport {
+    async fn reconnect(&self) -> Result<(), DataLinkError> {
+        let new_stream = TcpStream::connect(self.peer_addr).await?;
+        let mut guard = self.stream.lock().await;
+        *guard = new_stream;
+        tracing::info!(peer = %self.peer_addr, "reconnected modbus tcp transport");
+        Ok(())
+    }
+
     async fn exchange(
         &self,
-        unit_id: u8,
+        unit_id: UnitId,
         request_pdu: &[u8],
         response_pdu: &mut [u8],
     ) -> Result<usize, DataLinkError> {
@@ -129,7 +193,7 @@ impl DataLink for ModbusTcpTransport {
         let mut stream = self.stream.lock().await;
         trace!(
             transaction_id,
-            unit_id,
+            unit_id = unit_id.as_u8(),
             pdu_len = request_pdu.len(),
             "sending modbus tcp request"
         );
@@ -193,7 +257,7 @@ impl DataLink for ModbusTcpTransport {
         }
         trace!(
             transaction_id,
-            unit_id,
+            unit_id = unit_id.as_u8(),
             pdu_len,
             "received modbus tcp response"
         );
@@ -202,10 +266,19 @@ impl DataLink for ModbusTcpTransport {
 }
 
 #[cfg(test)]
+const _: () = {
+    fn _assert_send_sync<T: Send + Sync>() {}
+    fn _assertions() {
+        _assert_send_sync::<ModbusTcpTransport>();
+    }
+};
+
+#[cfg(test)]
 mod tests {
     use super::{DataLink, DataLinkError, ModbusTcpTransport};
     use rustmod_core::encoding::Writer;
     use rustmod_core::frame::tcp;
+    use rustmod_core::UnitId;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -226,7 +299,7 @@ mod tests {
             tcp::encode_frame(
                 &mut w,
                 1,
-                1,
+                UnitId::new(1),
                 &[0x03, 0x06, 0x02, 0x2B, 0x00, 0x00, 0x00, 0x64],
             )
             .unwrap();
@@ -236,7 +309,7 @@ mod tests {
         let transport = ModbusTcpTransport::connect(addr).await.unwrap();
         let mut response = [0u8; 256];
         let len = transport
-            .exchange(1, &[0x03, 0x00, 0x6B, 0x00, 0x03], &mut response)
+            .exchange(UnitId::new(1), &[0x03, 0x00, 0x6B, 0x00, 0x03], &mut response)
             .await
             .unwrap();
 
@@ -261,14 +334,14 @@ mod tests {
 
             let mut frame = [0u8; 9];
             let mut w = Writer::new(&mut frame);
-            tcp::encode_frame(&mut w, 2, 1, &[0x83, 0x02]).unwrap();
+            tcp::encode_frame(&mut w, 2, UnitId::new(1), &[0x83, 0x02]).unwrap();
             socket.write_all(w.as_written()).await.unwrap();
         });
 
         let transport = ModbusTcpTransport::connect(addr).await.unwrap();
         let mut response = [0u8; 16];
         let err = transport
-            .exchange(1, &[0x03, 0x00, 0x00, 0x00, 0x01], &mut response)
+            .exchange(UnitId::new(1), &[0x03, 0x00, 0x00, 0x00, 0x01], &mut response)
             .await
             .unwrap_err();
 
@@ -295,27 +368,27 @@ mod tests {
             socket.read_exact(&mut req).await.unwrap();
             let mut mismatch = [0u8; 9];
             let mut mismatch_w = Writer::new(&mut mismatch);
-            tcp::encode_frame(&mut mismatch_w, 2, 1, &[0x83, 0x02]).unwrap();
+            tcp::encode_frame(&mut mismatch_w, 2, UnitId::new(1), &[0x83, 0x02]).unwrap();
             socket.write_all(mismatch_w.as_written()).await.unwrap();
 
             let mut req2 = [0u8; 12];
             socket.read_exact(&mut req2).await.unwrap();
             let mut ok = [0u8; 11];
             let mut ok_w = Writer::new(&mut ok);
-            tcp::encode_frame(&mut ok_w, 2, 1, &[0x03, 0x02, 0x00, 0x2A]).unwrap();
+            tcp::encode_frame(&mut ok_w, 2, UnitId::new(1), &[0x03, 0x02, 0x00, 0x2A]).unwrap();
             socket.write_all(ok_w.as_written()).await.unwrap();
         });
 
         let transport = ModbusTcpTransport::connect(addr).await.unwrap();
         let mut response = [0u8; 16];
         let err = transport
-            .exchange(1, &[0x03, 0x00, 0x00, 0x00, 0x01], &mut response)
+            .exchange(UnitId::new(1), &[0x03, 0x00, 0x00, 0x00, 0x01], &mut response)
             .await
             .unwrap_err();
         assert!(matches!(err, DataLinkError::MismatchedTransactionId { .. }));
 
         let len = transport
-            .exchange(1, &[0x03, 0x00, 0x00, 0x00, 0x01], &mut response)
+            .exchange(UnitId::new(1), &[0x03, 0x00, 0x00, 0x00, 0x01], &mut response)
             .await
             .unwrap();
         assert_eq!(&response[..len], &[0x03, 0x02, 0x00, 0x2A]);
@@ -345,14 +418,14 @@ mod tests {
             socket.read_exact(&mut req2).await.unwrap();
             let mut ok = [0u8; 11];
             let mut ok_w = Writer::new(&mut ok);
-            tcp::encode_frame(&mut ok_w, 2, 1, &[0x03, 0x02, 0x00, 0x2A]).unwrap();
+            tcp::encode_frame(&mut ok_w, 2, UnitId::new(1), &[0x03, 0x02, 0x00, 0x2A]).unwrap();
             socket.write_all(ok_w.as_written()).await.unwrap();
         });
 
         let transport = ModbusTcpTransport::connect(addr).await.unwrap();
         let mut response = [0u8; 260];
         let err = transport
-            .exchange(1, &[0x03, 0x00, 0x00, 0x00, 0x01], &mut response)
+            .exchange(UnitId::new(1), &[0x03, 0x00, 0x00, 0x00, 0x01], &mut response)
             .await
             .unwrap_err();
         assert!(matches!(
@@ -361,7 +434,7 @@ mod tests {
         ));
 
         let len = transport
-            .exchange(1, &[0x03, 0x00, 0x00, 0x00, 0x01], &mut response)
+            .exchange(UnitId::new(1), &[0x03, 0x00, 0x00, 0x00, 0x01], &mut response)
             .await
             .unwrap();
         assert_eq!(&response[..len], &[0x03, 0x02, 0x00, 0x2A]);

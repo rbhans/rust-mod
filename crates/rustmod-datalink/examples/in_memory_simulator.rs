@@ -1,4 +1,4 @@
-use rustmod_datalink::{DataLink, InMemoryModbusService, ModbusTcpServer, ModbusTcpTransport};
+use rustmod_datalink::{DataLink, InMemoryModbusService, ModbusTcpServer, ModbusTcpTransport, UnitId};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = ModbusTcpTransport::connect(addr).await?;
     let mut response = [0u8; 260];
     let len = client
-        .exchange(1, &[0x03, 0x00, 0x00, 0x00, 0x01], &mut response)
+        .exchange(UnitId::new(1), &[0x03, 0x00, 0x00, 0x00, 0x01], &mut response)
         .await?;
 
     println!("response pdu: {:02X?}", &response[..len]);

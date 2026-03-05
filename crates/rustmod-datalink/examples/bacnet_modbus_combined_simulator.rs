@@ -1,6 +1,6 @@
 use rustmod_core::encoding::Reader;
 use rustmod_core::pdu::Response;
-use rustmod_datalink::{DataLink, InMemoryModbusService, ModbusTcpServer, ModbusTcpTransport};
+use rustmod_datalink::{DataLink, InMemoryModbusService, ModbusTcpServer, ModbusTcpTransport, UnitId};
 
 #[derive(Debug, Default)]
 struct BacnetSimulatorState {
@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let transport = ModbusTcpTransport::connect(addr).await?;
     let mut response = [0u8; 260];
     let len = transport
-        .exchange(1, &[0x03, 0x00, 0x00, 0x00, 0x01], &mut response)
+        .exchange(UnitId::new(1), &[0x03, 0x00, 0x00, 0x00, 0x01], &mut response)
         .await?;
 
     let mut reader = Reader::new(&response[..len]);

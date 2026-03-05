@@ -6,6 +6,7 @@ members = [
     "crates/rustmod-client",
     "crates/rustmod-tools",
 ]
+exclude = ["crates/rustmod-core/fuzz"]
 
 [workspace.package]
 edition = "2021"

@@ -1,15 +1,17 @@
 use crate::{ModbusService, ServiceError};
 use rustmod_core::encoding::Writer;
 use rustmod_core::pdu::{DecodedRequest, FunctionCode};
-use rustmod_core::EncodeError;
+use rustmod_core::{EncodeError, UnitId};
 use std::sync::RwLock;
 
+/// A fixed-size array of boolean values representing Modbus coils or discrete inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoilBank {
     values: Vec<bool>,
 }
 
 impl CoilBank {
+    /// Create a bank of `size` coils, all initially `false`.
     pub fn new(size: usize) -> Self {
         Self {
             values: vec![false; size],
@@ -38,12 +40,14 @@ impl CoilBank {
     }
 }
 
+/// A fixed-size array of 16-bit values representing Modbus holding or input registers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisterBank {
     values: Vec<u16>,
 }
 
 impl RegisterBank {
+    /// Create a bank of `size` registers, all initially `0`.
     pub fn new(size: usize) -> Self {
         Self {
             values: vec![0u16; size],
@@ -72,6 +76,7 @@ impl RegisterBank {
     }
 }
 
+/// The four Modbus address spaces: coils, discrete inputs, holding registers, and input registers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InMemoryPointModel {
     pub coils: CoilBank,
@@ -81,6 +86,7 @@ pub struct InMemoryPointModel {
 }
 
 impl InMemoryPointModel {
+    /// Create a new point model with the given address space sizes.
     pub fn new(
         coil_count: usize,
         discrete_input_count: usize,
@@ -96,12 +102,20 @@ impl InMemoryPointModel {
     }
 }
 
+/// Thread-safe in-memory Modbus device simulator.
+///
+/// Implements [`ModbusService`] with support for all standard function codes
+/// (FC01–FC08, FC15–FC16, FC22–FC24) plus FC17 (Report Server ID) and
+/// FC43/0x0E (Read Device Identification).
+///
+/// Useful for testing client code without physical hardware.
 #[derive(Debug)]
 pub struct InMemoryModbusService {
     model: RwLock<InMemoryPointModel>,
 }
 
 impl InMemoryModbusService {
+    /// Create a new simulator with the given address space sizes.
     pub fn new(
         coil_count: usize,
         discrete_input_count: usize,
@@ -116,79 +130,78 @@ impl InMemoryModbusService {
         ))
     }
 
+    /// Create a simulator from an existing [`InMemoryPointModel`].
     pub fn with_model(model: InMemoryPointModel) -> Self {
         Self {
             model: RwLock::new(model),
         }
     }
 
-    pub fn snapshot(&self) -> InMemoryPointModel {
+    fn read_model(&self) -> Result<std::sync::RwLockReadGuard<'_, InMemoryPointModel>, ServiceError> {
         self.model
             .read()
-            .expect("in-memory point model lock poisoned")
-            .clone()
+            .map_err(|_| ServiceError::Internal("in-memory point model lock poisoned"))
     }
 
+    fn write_model(&self) -> Result<std::sync::RwLockWriteGuard<'_, InMemoryPointModel>, ServiceError> {
+        self.model
+            .write()
+            .map_err(|_| ServiceError::Internal("in-memory point model lock poisoned"))
+    }
+
+    /// Clone the current state of all address spaces.
+    pub fn snapshot(&self) -> Result<InMemoryPointModel, ServiceError> {
+        Ok(self.read_model()?.clone())
+    }
+
+    /// Set a coil value at the given address.
     pub fn set_coil(&self, address: u16, value: bool) -> Result<(), ServiceError> {
-        self.model
-            .write()
-            .expect("in-memory point model lock poisoned")
-            .coils
-            .set(usize::from(address), value)
+        self.write_model()?.coils.set(usize::from(address), value)
     }
 
+    /// Set a discrete input value at the given address.
     pub fn set_discrete_input(&self, address: u16, value: bool) -> Result<(), ServiceError> {
-        self.model
-            .write()
-            .expect("in-memory point model lock poisoned")
+        self.write_model()?
             .discrete_inputs
             .set(usize::from(address), value)
     }
 
+    /// Set a holding register value at the given address.
     pub fn set_holding_register(&self, address: u16, value: u16) -> Result<(), ServiceError> {
-        self.model
-            .write()
-            .expect("in-memory point model lock poisoned")
+        self.write_model()?
             .holding_registers
             .set(usize::from(address), value)
     }
 
+    /// Set an input register value at the given address.
     pub fn set_input_register(&self, address: u16, value: u16) -> Result<(), ServiceError> {
-        self.model
-            .write()
-            .expect("in-memory point model lock poisoned")
+        self.write_model()?
             .input_registers
             .set(usize::from(address), value)
     }
 
-    pub fn coil(&self, address: u16) -> Option<bool> {
-        self.model
-            .read()
-            .expect("in-memory point model lock poisoned")
-            .coils
-            .get(usize::from(address))
+    /// Read a coil value at the given address.
+    pub fn coil(&self, address: u16) -> Result<Option<bool>, ServiceError> {
+        Ok(self.read_model()?.coils.get(usize::from(address)))
     }
 
-    pub fn holding_register(&self, address: u16) -> Option<u16> {
-        self.model
-            .read()
-            .expect("in-memory point model lock poisoned")
+    /// Read a holding register value at the given address.
+    pub fn holding_register(&self, address: u16) -> Result<Option<u16>, ServiceError> {
+        Ok(self
+            .read_model()?
             .holding_registers
-            .get(usize::from(address))
+            .get(usize::from(address)))
     }
 }
 
 impl ModbusService for InMemoryModbusService {
     fn handle(
         &self,
-        unit_id: u8,
+        unit_id: UnitId,
         request: DecodedRequest<'_>,
         response_pdu: &mut [u8],
     ) -> Result<usize, ServiceError> {
-        let mut model = self
-            .model
-            .write()
-            .expect("in-memory point model lock poisoned");
+        let mut model = self.write_model()?;
 
         let mut w = Writer::new(response_pdu);
 
@@ -403,12 +416,71 @@ impl ModbusService for InMemoryModbusService {
                         .map_err(map_encode)?;
                 }
             }
+            DecodedRequest::ReadExceptionStatus(_) => {
+                w.write_u8(FunctionCode::ReadExceptionStatus.as_u8())
+                    .map_err(map_encode)?;
+                w.write_u8(0x00).map_err(map_encode)?;
+            }
+            DecodedRequest::Diagnostics(req) => {
+                match req.sub_function {
+                    0x0000 => {
+                        // Return Query Data: echo request
+                        w.write_u8(FunctionCode::Diagnostics.as_u8())
+                            .map_err(map_encode)?;
+                        w.write_be_u16(req.sub_function).map_err(map_encode)?;
+                        w.write_be_u16(req.data).map_err(map_encode)?;
+                    }
+                    0x000A => {
+                        // Clear Counters: echo request
+                        w.write_u8(FunctionCode::Diagnostics.as_u8())
+                            .map_err(map_encode)?;
+                        w.write_be_u16(req.sub_function).map_err(map_encode)?;
+                        w.write_be_u16(0x0000).map_err(map_encode)?;
+                    }
+                    _ => {
+                        return Err(ServiceError::Exception(
+                            rustmod_core::pdu::ExceptionCode::IllegalFunction,
+                        ));
+                    }
+                }
+            }
+            DecodedRequest::ReadFifoQueue(req) => {
+                let addr = usize::from(req.fifo_pointer_address);
+                let fifo_count_val = model.holding_registers.get(addr).ok_or(
+                    ServiceError::Exception(rustmod_core::pdu::ExceptionCode::IllegalDataAddress),
+                )?;
+                let fifo_count = usize::from(fifo_count_val);
+                if fifo_count > 31 {
+                    return Err(ServiceError::Exception(
+                        rustmod_core::pdu::ExceptionCode::IllegalDataValue,
+                    ));
+                }
+                let byte_count = fifo_count * 2 + 2;
+                w.write_u8(FunctionCode::ReadFifoQueue.as_u8())
+                    .map_err(map_encode)?;
+                w.write_be_u16(u16::try_from(byte_count).map_err(|_| {
+                    ServiceError::Internal("fifo byte count overflow")
+                })?)
+                .map_err(map_encode)?;
+                w.write_be_u16(fifo_count_val).map_err(map_encode)?;
+                for i in 0..fifo_count {
+                    let reg_addr = addr.checked_add(1 + i).ok_or(ServiceError::Exception(
+                        rustmod_core::pdu::ExceptionCode::IllegalDataAddress,
+                    ))?;
+                    let val = model.holding_registers.get(reg_addr).ok_or(
+                        ServiceError::Exception(
+                            rustmod_core::pdu::ExceptionCode::IllegalDataAddress,
+                        ),
+                    )?;
+                    w.write_be_u16(val).map_err(map_encode)?;
+                }
+            }
             DecodedRequest::Custom(req) => {
                 if req.function_code == 0x11 {
                     // FC17 Report Server ID: byte-count + server-id + run-indicator.
                     w.write_u8(0x11).map_err(map_encode)?;
                     w.write_u8(0x02).map_err(map_encode)?;
-                    w.write_u8(unit_id).map_err(map_encode)?;
+                    w.write_u8(unit_id.as_u8()).map_err(map_encode)?;
                     w.write_u8(0xFF).map_err(map_encode)?;
                 } else if req.function_code == 0x2B {
                     // FC43/MEI 0x0E Read Device Identification.
@@ -445,6 +517,11 @@ impl ModbusService for InMemoryModbusService {
                     ));
                 }
             }
+            _ => {
+                return Err(ServiceError::Exception(
+                    rustmod_core::pdu::ExceptionCode::IllegalFunction,
+                ));
+            }
         }
 
         Ok(w.position())
@@ -468,6 +545,7 @@ fn map_encode(err: EncodeError) -> ServiceError {
         EncodeError::InvalidLength => "response length invalid",
         EncodeError::Unsupported => "response operation unsupported",
         EncodeError::Message(_) => "response encode message",
+        _ => "response encode error",
     };
     ServiceError::Internal(msg)
 }
@@ -478,6 +556,7 @@ mod tests {
     use crate::ModbusService;
     use rustmod_core::encoding::Reader;
     use rustmod_core::pdu::{DecodedRequest, Response};
+    use rustmod_core::UnitId;
 
     #[test]
     fn in_memory_service_reads_and_writes() {
@@ -489,7 +568,7 @@ mod tests {
             let mut r = Reader::new(&[0x03, 0x00, 0x00, 0x00, 0x01]);
             DecodedRequest::decode(&mut r).unwrap()
         };
-        let len = service.handle(1, request, &mut pdu).unwrap();
+        let len = service.handle(UnitId::new(1), request, &mut pdu).unwrap();
 
         let mut rr = Reader::new(&pdu[..len]);
         match Response::decode(&mut rr).unwrap() {
@@ -501,15 +580,15 @@ mod tests {
             let mut r = Reader::new(&[0x06, 0x00, 0x01, 0x12, 0x34]);
             DecodedRequest::decode(&mut r).unwrap()
         };
-        let _ = service.handle(1, write_req, &mut pdu).unwrap();
-        assert_eq!(service.holding_register(1), Some(0x1234));
+        let _ = service.handle(UnitId::new(1), write_req, &mut pdu).unwrap();
+        assert_eq!(service.holding_register(1).unwrap(), Some(0x1234));
 
         let mask_req = {
             let mut r = Reader::new(&[0x16, 0x00, 0x01, 0xFF, 0x00, 0x00, 0x12]);
             DecodedRequest::decode(&mut r).unwrap()
         };
-        let _ = service.handle(1, mask_req, &mut pdu).unwrap();
-        assert_eq!(service.holding_register(1), Some(0x1212));
+        let _ = service.handle(UnitId::new(1), mask_req, &mut pdu).unwrap();
+        assert_eq!(service.holding_register(1).unwrap(), Some(0x1212));
 
         let rw_req = {
             let mut r = Reader::new(&[
@@ -518,7 +597,7 @@ mod tests {
             ]);
             DecodedRequest::decode(&mut r).unwrap()
         };
-        let len = service.handle(1, rw_req, &mut pdu).unwrap();
+        let len = service.handle(UnitId::new(1), rw_req, &mut pdu).unwrap();
         let mut rr = Reader::new(&pdu[..len]);
         match Response::decode(&mut rr).unwrap() {
             Response::ReadWriteMultipleRegisters(resp) => {
@@ -538,7 +617,7 @@ mod tests {
             let mut r = Reader::new(&[0x11]);
             DecodedRequest::decode(&mut r).unwrap()
         };
-        let len = service.handle(0x2A, request, &mut pdu).unwrap();
+        let len = service.handle(UnitId::new(0x2A), request, &mut pdu).unwrap();
 
         let mut rr = Reader::new(&pdu[..len]);
         match Response::decode(&mut rr).unwrap() {
@@ -559,7 +638,7 @@ mod tests {
             let mut r = Reader::new(&[0x2B, 0x0E, 0x01, 0x00]);
             DecodedRequest::decode(&mut r).unwrap()
         };
-        let len = service.handle(0x2A, request, &mut pdu).unwrap();
+        let len = service.handle(UnitId::new(0x2A), request, &mut pdu).unwrap();
 
         let mut rr = Reader::new(&pdu[..len]);
         match Response::decode(&mut rr).unwrap() {

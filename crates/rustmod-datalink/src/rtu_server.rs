@@ -3,7 +3,7 @@ use crate::DataLinkError;
 use rustmod_core::encoding::{Reader, Writer};
 use rustmod_core::frame::rtu as rtu_frame;
 use rustmod_core::pdu::{DecodedRequest, ExceptionCode, ExceptionResponse};
-use rustmod_core::DecodeError;
+use rustmod_core::{DecodeError, UnitId};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
@@ -90,7 +90,7 @@ impl<S: ModbusService> ModbusRtuServer<S> {
     }
 }
 
-fn decode_suffix_frame(buffer: &[u8]) -> Option<(usize, u8, &[u8])> {
+fn decode_suffix_frame(buffer: &[u8]) -> Option<(usize, UnitId, &[u8])> {
     if buffer.len() < 4 {
         return None;
     }
@@ -155,7 +155,7 @@ async fn serve_rtu_io<S: ModbusService, IO: AsyncRead + AsyncWrite + Unpin>(
         };
 
         debug!(
-            unit_id,
+            unit_id = unit_id.as_u8(),
             function = decoded.function_code().as_u8(),
             pdu_len = request_pdu.len(),
             "received modbus rtu request"
@@ -165,7 +165,7 @@ async fn serve_rtu_io<S: ModbusService, IO: AsyncRead + AsyncWrite + Unpin>(
         let result = service.handle(unit_id, decoded, &mut response_pdu);
 
         // Broadcast requests (unit id 0) are writes only and do not receive responses.
-        if unit_id == 0 {
+        if unit_id == UnitId::BROADCAST {
             continue;
         }
 
@@ -217,12 +217,13 @@ fn map_decode_error_to_exception(err: DecodeError) -> ExceptionCode {
         DecodeError::InvalidCrc | DecodeError::Unsupported | DecodeError::Message(_) => {
             ExceptionCode::ServerDeviceFailure
         }
+        _ => ExceptionCode::ServerDeviceFailure,
     }
 }
 
 async fn send_rtu_exception<IO: AsyncWrite + Unpin>(
     io: &mut IO,
-    unit_id: u8,
+    unit_id: UnitId,
     function_code: u8,
     exception_code: ExceptionCode,
 ) -> Result<(), DataLinkError> {
@@ -240,7 +241,7 @@ async fn send_rtu_exception<IO: AsyncWrite + Unpin>(
 
 async fn send_rtu_pdu<IO: AsyncWrite + Unpin>(
     io: &mut IO,
-    unit_id: u8,
+    unit_id: UnitId,
     pdu: &[u8],
 ) -> Result<(), DataLinkError> {
     let mut frame = vec![0u8; pdu.len() + 3];
@@ -258,6 +259,7 @@ mod tests {
     use rustmod_core::encoding::Writer;
     use rustmod_core::frame::rtu as rtu_frame;
     use rustmod_core::pdu::{DecodedRequest, ExceptionCode};
+    use rustmod_core::UnitId;
     use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 
     struct EchoReadService;
@@ -265,7 +267,7 @@ mod tests {
     impl ModbusService for EchoReadService {
         fn handle(
             &self,
-            _unit_id: u8,
+            _unit_id: UnitId,
             request: DecodedRequest<'_>,
             response_pdu: &mut [u8],
         ) -> Result<usize, ServiceError> {
@@ -296,13 +298,13 @@ mod tests {
 
         let mut request = [0u8; 16];
         let mut writer = Writer::new(&mut request);
-        rtu_frame::encode_frame(&mut writer, 1, &[0x03, 0x00, 0x00, 0x00, 0x01]).unwrap();
+        rtu_frame::encode_frame(&mut writer, UnitId::new(1), &[0x03, 0x00, 0x00, 0x00, 0x01]).unwrap();
         client.write_all(writer.as_written()).await.unwrap();
 
         let mut response = [0u8; 7];
         client.read_exact(&mut response).await.unwrap();
         let (unit_id, pdu) = rtu_frame::decode_frame(&response).unwrap();
-        assert_eq!(unit_id, 1);
+        assert_eq!(unit_id, UnitId::new(1));
         assert_eq!(pdu, &[0x03, 0x02, 0x00, 0x2A]);
 
         drop(client);
@@ -327,7 +329,7 @@ mod tests {
         let mut writer = Writer::new(&mut request);
         rtu_frame::encode_frame(
             &mut writer,
-            1,
+            UnitId::new(1),
             &[0x10, 0x00, 0x00, 0x00, 0x02, 0x03, 0x12, 0x34, 0x56],
         )
         .unwrap();
@@ -336,7 +338,7 @@ mod tests {
         let mut response = [0u8; 5];
         client.read_exact(&mut response).await.unwrap();
         let (unit_id, pdu) = rtu_frame::decode_frame(&response).unwrap();
-        assert_eq!(unit_id, 1);
+        assert_eq!(unit_id, UnitId::new(1));
         assert_eq!(pdu, &[0x90, 0x03]);
 
         drop(client);

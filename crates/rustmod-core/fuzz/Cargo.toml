@@ -1,0 +1,32 @@
+[package]
+name = "rustmod-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rustmod-core = { path = "..", features = ["std", "alloc"] }
+
+[[bin]]
+name = "fuzz_request_decode"
+path = "fuzz_targets/fuzz_request_decode.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_response_decode"
+path = "fuzz_targets/fuzz_response_decode.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_rtu_decode"
+path = "fuzz_targets/fuzz_rtu_decode.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_tcp_decode"
+path = "fuzz_targets/fuzz_tcp_decode.rs"
+doc = false

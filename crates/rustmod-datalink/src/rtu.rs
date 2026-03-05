@@ -2,6 +2,7 @@ use crate::{DataLink, DataLinkError};
 use async_trait::async_trait;
 use rustmod_core::encoding::Writer;
 use rustmod_core::frame::rtu as rtu_frame;
+use rustmod_core::UnitId;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -12,7 +13,7 @@ use tokio_serial::{
 };
 use tracing::trace;
 
-fn decode_suffix_frame(buffer: &[u8]) -> Option<(usize, u8, &[u8])> {
+fn decode_suffix_frame(buffer: &[u8]) -> Option<(usize, UnitId, &[u8])> {
     if buffer.len() < 4 {
         return None;
     }
@@ -83,7 +84,7 @@ impl ModbusRtuTransport {
 impl DataLink for ModbusRtuTransport {
     async fn exchange(
         &self,
-        unit_id: u8,
+        unit_id: UnitId,
         request_pdu: &[u8],
         response_pdu: &mut [u8],
     ) -> Result<usize, DataLinkError> {
@@ -101,7 +102,7 @@ impl DataLink for ModbusRtuTransport {
         rtu_frame::encode_frame(&mut req_writer, unit_id, request_pdu)?;
 
         let mut stream = self.stream.lock().await;
-        trace!(unit_id, pdu_len = request_pdu.len(), "sending modbus rtu request");
+        trace!(unit_id = unit_id.as_u8(), pdu_len = request_pdu.len(), "sending modbus rtu request");
         stream.write_all(req_writer.as_written()).await?;
         stream.flush().await?;
 
@@ -141,7 +142,7 @@ impl DataLink for ModbusRtuTransport {
                         });
                     }
                     response_pdu[..pdu.len()].copy_from_slice(pdu);
-                    trace!(unit_id, pdu_len = pdu.len(), "received modbus rtu response");
+                    trace!(unit_id = unit_id.as_u8(), pdu_len = pdu.len(), "received modbus rtu response");
                     return Ok(pdu.len());
                 }
                 // Ignore frames for other units and continue waiting for our response.
@@ -156,18 +157,19 @@ mod tests {
     use super::decode_suffix_frame;
     use rustmod_core::encoding::Writer;
     use rustmod_core::frame::rtu as rtu_frame;
+    use rustmod_core::UnitId;
 
     #[test]
     fn decode_suffix_skips_leading_noise() {
         let mut frame = [0u8; 16];
         let mut w = Writer::new(&mut frame);
-        rtu_frame::encode_frame(&mut w, 1, &[0x03, 0x02, 0x00, 0x2A]).unwrap();
+        rtu_frame::encode_frame(&mut w, UnitId::new(1), &[0x03, 0x02, 0x00, 0x2A]).unwrap();
 
         let mut noisy = vec![0x55, 0xAA];
         noisy.extend_from_slice(w.as_written());
         let (_, address, pdu) = decode_suffix_frame(&noisy).expect("frame should decode");
 
-        assert_eq!(address, 1);
+        assert_eq!(address, UnitId::new(1));
         assert_eq!(pdu, &[0x03, 0x02, 0x00, 0x2A]);
     }
 
@@ -175,7 +177,7 @@ mod tests {
     fn decode_suffix_none_for_partial_frame() {
         let mut frame = [0u8; 16];
         let mut w = Writer::new(&mut frame);
-        rtu_frame::encode_frame(&mut w, 1, &[0x03, 0x02, 0x00, 0x2A]).unwrap();
+        rtu_frame::encode_frame(&mut w, UnitId::new(1), &[0x03, 0x02, 0x00, 0x2A]).unwrap();
         let bytes = w.as_written();
 
         assert!(decode_suffix_frame(&bytes[..bytes.len() - 1]).is_none());

@@ -1,5 +1,9 @@
-use crate::ClientError;
+use crate::{ClientError, InvalidResponseKind};
 
+/// A local cache of coil values mapped to their Modbus addresses.
+///
+/// Use [`apply_read`](CoilPoints::apply_read) to merge values returned by
+/// [`ModbusClient::read_coils`](crate::ModbusClient::read_coils).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoilPoints {
     start_address: u16,
@@ -7,6 +11,8 @@ pub struct CoilPoints {
 }
 
 impl CoilPoints {
+    /// Create a new coil cache with `count` coils starting at `start_address`, all initially `false`.
+    #[must_use]
     pub fn new(start_address: u16, count: usize) -> Self {
         Self {
             start_address,
@@ -14,6 +20,8 @@ impl CoilPoints {
         }
     }
 
+    /// Create a coil cache from existing values.
+    #[must_use]
     pub fn from_values(start_address: u16, values: Vec<bool>) -> Self {
         Self {
             start_address,
@@ -21,52 +29,65 @@ impl CoilPoints {
         }
     }
 
+    /// The starting Modbus address of this cache.
     pub fn start_address(&self) -> u16 {
         self.start_address
     }
 
+    /// The number of coils in this cache.
     pub fn len(&self) -> usize {
         self.values.len()
     }
 
+    /// Returns `true` if the cache contains no coils.
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
 
+    /// View the raw coil values as a slice.
     pub fn values(&self) -> &[bool] {
         &self.values
     }
 
+    /// Get the coil value at the given Modbus address, or `None` if out of range.
     pub fn get(&self, address: u16) -> Option<bool> {
         let offset = usize::from(address.checked_sub(self.start_address)?);
         self.values.get(offset).copied()
     }
 
+    /// Set the coil value at the given Modbus address.
     pub fn set(&mut self, address: u16, value: bool) -> Result<(), ClientError> {
         let offset = usize::from(
             address
                 .checked_sub(self.start_address)
-                .ok_or(ClientError::InvalidResponse("coil address out of range"))?,
+                .ok_or(ClientError::InvalidResponse(InvalidResponseKind::Other("coil address out of range")))?,
         );
         let slot = self
             .values
             .get_mut(offset)
-            .ok_or(ClientError::InvalidResponse("coil address out of range"))?;
+            .ok_or(ClientError::InvalidResponse(InvalidResponseKind::Other("coil address out of range")))?;
         *slot = value;
         Ok(())
     }
 
+    /// Merge a batch of read values into this cache at the given start address.
     pub fn apply_read(&mut self, start_address: u16, values: &[bool]) -> Result<(), ClientError> {
         for (i, value) in values.iter().copied().enumerate() {
+            let offset = u16::try_from(i)
+                .map_err(|_| ClientError::InvalidResponse(InvalidResponseKind::Other("coil address overflow")))?;
             let addr = start_address
-                .checked_add(i as u16)
-                .ok_or(ClientError::InvalidResponse("coil address overflow"))?;
+                .checked_add(offset)
+                .ok_or(ClientError::InvalidResponse(InvalidResponseKind::Other("coil address overflow")))?;
             self.set(addr, value)?;
         }
         Ok(())
     }
 }
 
+/// A local cache of 16-bit register values mapped to their Modbus addresses.
+///
+/// Use [`apply_read`](RegisterPoints::apply_read) to merge values returned by
+/// [`ModbusClient::read_holding_registers`](crate::ModbusClient::read_holding_registers).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisterPoints {
     start_address: u16,
@@ -74,6 +95,8 @@ pub struct RegisterPoints {
 }
 
 impl RegisterPoints {
+    /// Create a new register cache with `count` registers starting at `start_address`, all initially `0`.
+    #[must_use]
     pub fn new(start_address: u16, count: usize) -> Self {
         Self {
             start_address,
@@ -81,6 +104,8 @@ impl RegisterPoints {
         }
     }
 
+    /// Create a register cache from existing values.
+    #[must_use]
     pub fn from_values(start_address: u16, values: Vec<u16>) -> Self {
         Self {
             start_address,
@@ -88,46 +113,55 @@ impl RegisterPoints {
         }
     }
 
+    /// The starting Modbus address of this cache.
     pub fn start_address(&self) -> u16 {
         self.start_address
     }
 
+    /// The number of registers in this cache.
     pub fn len(&self) -> usize {
         self.values.len()
     }
 
+    /// Returns `true` if the cache contains no registers.
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
 
+    /// View the raw register values as a slice.
     pub fn values(&self) -> &[u16] {
         &self.values
     }
 
+    /// Get the register value at the given Modbus address, or `None` if out of range.
     pub fn get(&self, address: u16) -> Option<u16> {
         let offset = usize::from(address.checked_sub(self.start_address)?);
         self.values.get(offset).copied()
     }
 
+    /// Set the register value at the given Modbus address.
     pub fn set(&mut self, address: u16, value: u16) -> Result<(), ClientError> {
         let offset = usize::from(
             address
                 .checked_sub(self.start_address)
-                .ok_or(ClientError::InvalidResponse("register address out of range"))?,
+                .ok_or(ClientError::InvalidResponse(InvalidResponseKind::Other("register address out of range")))?,
         );
         let slot = self
             .values
             .get_mut(offset)
-            .ok_or(ClientError::InvalidResponse("register address out of range"))?;
+            .ok_or(ClientError::InvalidResponse(InvalidResponseKind::Other("register address out of range")))?;
         *slot = value;
         Ok(())
     }
 
+    /// Merge a batch of read values into this cache at the given start address.
     pub fn apply_read(&mut self, start_address: u16, values: &[u16]) -> Result<(), ClientError> {
         for (i, value) in values.iter().copied().enumerate() {
+            let offset = u16::try_from(i)
+                .map_err(|_| ClientError::InvalidResponse(InvalidResponseKind::Other("register address overflow")))?;
             let addr = start_address
-                .checked_add(i as u16)
-                .ok_or(ClientError::InvalidResponse("register address overflow"))?;
+                .checked_add(offset)
+                .ok_or(ClientError::InvalidResponse(InvalidResponseKind::Other("register address overflow")))?;
             self.set(addr, value)?;
         }
         Ok(())

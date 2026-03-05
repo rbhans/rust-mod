@@ -2,6 +2,7 @@ use crate::encoding::{Reader, Writer};
 use crate::pdu::{ExceptionResponse, FunctionCode};
 use crate::{DecodeError, EncodeError};
 
+const MAX_READ_COIL_BYTES: usize = 250;
 const MAX_READ_REGISTERS: u16 = 125;
 const MAX_WRITE_COILS: u16 = 1968;
 const MAX_WRITE_REGISTERS: u16 = 123;
@@ -13,15 +14,17 @@ fn validate_echo_quantity(quantity: u16, max: u16) -> Result<(), DecodeError> {
     Ok(())
 }
 
+/// FC01 Read Coils response containing packed coil status bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadCoilsResponse<'a> {
+    /// Packed bit array of coil states (LSB of first byte = first coil).
     pub coil_status: &'a [u8],
 }
 
 impl<'a> ReadCoilsResponse<'a> {
     fn decode_body(r: &mut Reader<'a>) -> Result<Self, DecodeError> {
         let byte_count = usize::from(r.read_u8()?);
-        if byte_count == 0 {
+        if byte_count == 0 || byte_count > MAX_READ_COIL_BYTES {
             return Err(DecodeError::InvalidLength);
         }
         let data = r.read_exact(byte_count)?;
@@ -46,15 +49,17 @@ impl<'a> ReadCoilsResponse<'a> {
     }
 }
 
+/// FC02 Read Discrete Inputs response containing packed input status bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadDiscreteInputsResponse<'a> {
+    /// Packed bit array of discrete input states (LSB of first byte = first input).
     pub input_status: &'a [u8],
 }
 
 impl<'a> ReadDiscreteInputsResponse<'a> {
     fn decode_body(r: &mut Reader<'a>) -> Result<Self, DecodeError> {
         let byte_count = usize::from(r.read_u8()?);
-        if byte_count == 0 {
+        if byte_count == 0 || byte_count > MAX_READ_COIL_BYTES {
             return Err(DecodeError::InvalidLength);
         }
         let data = r.read_exact(byte_count)?;
@@ -79,8 +84,10 @@ impl<'a> ReadDiscreteInputsResponse<'a> {
     }
 }
 
+/// FC03 Read Holding Registers response containing register values as raw big-endian bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadHoldingRegistersResponse<'a> {
+    /// Raw register data as big-endian byte pairs (2 bytes per register).
     pub data: &'a [u8],
 }
 
@@ -123,8 +130,10 @@ impl<'a> ReadHoldingRegistersResponse<'a> {
     }
 }
 
+/// FC04 Read Input Registers response containing register values as raw big-endian bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadInputRegistersResponse<'a> {
+    /// Raw register data as big-endian byte pairs (2 bytes per register).
     pub data: &'a [u8],
 }
 
@@ -167,9 +176,12 @@ impl<'a> ReadInputRegistersResponse<'a> {
     }
 }
 
+/// FC05 Write Single Coil response echoing the written address and value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteSingleCoilResponse {
+    /// Address of the coil that was written.
     pub address: u16,
+    /// Value written to the coil (`true` = ON, `false` = OFF).
     pub value: bool,
 }
 
@@ -193,9 +205,12 @@ impl WriteSingleCoilResponse {
     }
 }
 
+/// FC06 Write Single Register response echoing the written address and value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteSingleRegisterResponse {
+    /// Address of the register that was written.
     pub address: u16,
+    /// Value written to the register.
     pub value: u16,
 }
 
@@ -215,9 +230,12 @@ impl WriteSingleRegisterResponse {
     }
 }
 
+/// FC15 Write Multiple Coils response echoing the starting address and quantity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteMultipleCoilsResponse {
+    /// Starting address of the coils that were written.
     pub start_address: u16,
+    /// Number of coils written.
     pub quantity: u16,
 }
 
@@ -243,9 +261,12 @@ impl WriteMultipleCoilsResponse {
     }
 }
 
+/// FC16 Write Multiple Registers response echoing the starting address and quantity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteMultipleRegistersResponse {
+    /// Starting address of the registers that were written.
     pub start_address: u16,
+    /// Number of registers written.
     pub quantity: u16,
 }
 
@@ -271,10 +292,16 @@ impl WriteMultipleRegistersResponse {
     }
 }
 
+/// FC22 Mask Write Register response echoing the address and masks applied.
+///
+/// The server applies the formula: `result = (current AND and_mask) OR (or_mask AND NOT and_mask)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MaskWriteRegisterResponse {
+    /// Address of the register that was modified.
     pub address: u16,
+    /// AND mask that was applied.
     pub and_mask: u16,
+    /// OR mask that was applied.
     pub or_mask: u16,
 }
 
@@ -296,8 +323,10 @@ impl MaskWriteRegisterResponse {
     }
 }
 
+/// FC23 Read/Write Multiple Registers response containing the read register values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadWriteMultipleRegistersResponse<'a> {
+    /// Raw register data as big-endian byte pairs (2 bytes per register).
     pub data: &'a [u8],
 }
 
@@ -336,9 +365,101 @@ impl<'a> ReadWriteMultipleRegistersResponse<'a> {
     }
 }
 
+/// FC07 Read Exception Status response containing 8 exception coil states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadExceptionStatusResponse {
+    /// Eight exception coil values packed into a single byte (bit 0 = coil 0).
+    pub data: u8,
+}
+
+impl ReadExceptionStatusResponse {
+    fn decode_body(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        Ok(Self { data: r.read_u8()? })
+    }
+
+    pub fn encode(&self, w: &mut Writer<'_>) -> Result<(), EncodeError> {
+        w.write_u8(FunctionCode::ReadExceptionStatus.as_u8())?;
+        w.write_u8(self.data)?;
+        Ok(())
+    }
+}
+
+/// FC08 Diagnostics response echoing the sub-function code and data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiagnosticsResponse {
+    /// Sub-function code (e.g., 0x0000 for Return Query Data).
+    pub sub_function: u16,
+    /// Diagnostic data word.
+    pub data: u16,
+}
+
+impl DiagnosticsResponse {
+    fn decode_body(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        Ok(Self {
+            sub_function: r.read_be_u16()?,
+            data: r.read_be_u16()?,
+        })
+    }
+
+    pub fn encode(&self, w: &mut Writer<'_>) -> Result<(), EncodeError> {
+        w.write_u8(FunctionCode::Diagnostics.as_u8())?;
+        w.write_be_u16(self.sub_function)?;
+        w.write_be_u16(self.data)?;
+        Ok(())
+    }
+}
+
+/// FC24 Read FIFO Queue response containing the queued register values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadFifoQueueResponse<'a> {
+    /// Raw FIFO register values as big-endian byte pairs (2 bytes per value).
+    pub fifo_values: &'a [u8],
+}
+
+impl<'a> ReadFifoQueueResponse<'a> {
+    fn decode_body(r: &mut Reader<'a>) -> Result<Self, DecodeError> {
+        let byte_count = usize::from(r.read_be_u16()?);
+        let fifo_count = usize::from(r.read_be_u16()?);
+        let expected = fifo_count * 2;
+        if byte_count != expected + 2 {
+            return Err(DecodeError::InvalidLength);
+        }
+        let fifo_values = r.read_exact(expected)?;
+        Ok(Self { fifo_values })
+    }
+
+    pub fn encode(&self, w: &mut Writer<'_>) -> Result<(), EncodeError> {
+        if (self.fifo_values.len() % 2) != 0 {
+            return Err(EncodeError::InvalidLength);
+        }
+        let fifo_count = self.fifo_values.len() / 2;
+        let byte_count = self.fifo_values.len() + 2;
+        w.write_u8(FunctionCode::ReadFifoQueue.as_u8())?;
+        w.write_be_u16(
+            u16::try_from(byte_count).map_err(|_| EncodeError::ValueOutOfRange)?,
+        )?;
+        w.write_be_u16(u16::try_from(fifo_count).map_err(|_| EncodeError::ValueOutOfRange)?)?;
+        w.write_all(self.fifo_values)?;
+        Ok(())
+    }
+
+    pub fn fifo_count(&self) -> usize {
+        self.fifo_values.len() / 2
+    }
+
+    pub fn value(&self, index: usize) -> Option<u16> {
+        let offset = index.checked_mul(2)?;
+        let bytes = self.fifo_values.get(offset..offset + 2)?;
+        Some(u16::from_be_bytes([bytes[0], bytes[1]]))
+    }
+}
+
+/// Response for a custom (non-standard) function code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CustomResponse<'a> {
+    /// The function code byte.
     pub function_code: u8,
+    /// Raw response payload following the function code.
     pub data: &'a [u8],
 }
 
@@ -353,7 +474,12 @@ impl<'a> CustomResponse<'a> {
     }
 }
 
+/// A decoded Modbus response PDU.
+///
+/// Variant is determined by the function code byte. Use [`Response::decode`] to parse
+/// from a byte buffer and [`Response::encode`] to serialize back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Response<'a> {
     ReadCoils(ReadCoilsResponse<'a>),
     ReadDiscreteInputs(ReadDiscreteInputsResponse<'a>),
@@ -365,6 +491,9 @@ pub enum Response<'a> {
     WriteMultipleRegisters(WriteMultipleRegistersResponse),
     MaskWriteRegister(MaskWriteRegisterResponse),
     ReadWriteMultipleRegisters(ReadWriteMultipleRegistersResponse<'a>),
+    ReadExceptionStatus(ReadExceptionStatusResponse),
+    Diagnostics(DiagnosticsResponse),
+    ReadFifoQueue(ReadFifoQueueResponse<'a>),
     Custom(CustomResponse<'a>),
     Exception(ExceptionResponse),
 }
@@ -406,6 +535,15 @@ impl<'a> Response<'a> {
             FunctionCode::ReadWriteMultipleRegisters => Ok(Self::ReadWriteMultipleRegisters(
                 ReadWriteMultipleRegistersResponse::decode_body(r)?,
             )),
+            FunctionCode::ReadExceptionStatus => Ok(Self::ReadExceptionStatus(
+                ReadExceptionStatusResponse::decode_body(r)?,
+            )),
+            FunctionCode::Diagnostics => {
+                Ok(Self::Diagnostics(DiagnosticsResponse::decode_body(r)?))
+            }
+            FunctionCode::ReadFifoQueue => {
+                Ok(Self::ReadFifoQueue(ReadFifoQueueResponse::decode_body(r)?))
+            }
             FunctionCode::Custom(function_code) => {
                 let data = r.read_exact(r.remaining())?;
                 Ok(Self::Custom(CustomResponse {
@@ -428,6 +566,9 @@ impl<'a> Response<'a> {
             Self::WriteMultipleRegisters(resp) => resp.encode(w),
             Self::MaskWriteRegister(resp) => resp.encode(w),
             Self::ReadWriteMultipleRegisters(resp) => resp.encode(w),
+            Self::ReadExceptionStatus(resp) => resp.encode(w),
+            Self::Diagnostics(resp) => resp.encode(w),
+            Self::ReadFifoQueue(resp) => resp.encode(w),
             Self::Custom(resp) => resp.encode(w),
             Self::Exception(resp) => resp.encode(w),
         }

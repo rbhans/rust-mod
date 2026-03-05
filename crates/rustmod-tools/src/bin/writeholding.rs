@@ -1,4 +1,5 @@
 use clap::Parser;
+use rustmod_client::UnitId;
 use rustmod_tools::common::{TcpConnectionArgs, build_client, init_tracing};
 
 #[derive(Debug, Parser)]
@@ -25,11 +26,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.values.len() == 1 {
         client
-            .write_single_register(args.unit_id, args.start, args.values[0])
+            .write_single_register(UnitId::new(args.unit_id), args.start, args.values[0])
             .await?;
     } else {
         client
-            .write_multiple_registers(args.unit_id, args.start, &args.values)
+            .write_multiple_registers(UnitId::new(args.unit_id), args.start, &args.values)
             .await?;
     }
 

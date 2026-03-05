@@ -43,6 +43,7 @@ fn pack_coils(values: &[bool], out: &mut [u8]) {
     }
 }
 
+/// FC01 Read Coils request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadCoilsRequest {
     pub start_address: u16,
@@ -61,6 +62,7 @@ impl ReadCoilsRequest {
     }
 }
 
+/// FC02 Read Discrete Inputs request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadDiscreteInputsRequest {
     pub start_address: u16,
@@ -79,6 +81,7 @@ impl ReadDiscreteInputsRequest {
     }
 }
 
+/// FC03 Read Holding Registers request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadHoldingRegistersRequest {
     pub start_address: u16,
@@ -97,6 +100,7 @@ impl ReadHoldingRegistersRequest {
     }
 }
 
+/// FC04 Read Input Registers request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadInputRegistersRequest {
     pub start_address: u16,
@@ -115,6 +119,7 @@ impl ReadInputRegistersRequest {
     }
 }
 
+/// FC05 Write Single Coil request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteSingleCoilRequest {
     pub address: u16,
@@ -130,6 +135,7 @@ impl WriteSingleCoilRequest {
     }
 }
 
+/// FC06 Write Single Register request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteSingleRegisterRequest {
     pub address: u16,
@@ -145,6 +151,7 @@ impl WriteSingleRegisterRequest {
     }
 }
 
+/// FC15 Write Multiple Coils request (encoding form with borrowed coil slice).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteMultipleCoilsRequest<'a> {
     pub start_address: u16,
@@ -182,6 +189,7 @@ impl<'a> WriteMultipleCoilsRequest<'a> {
     }
 }
 
+/// FC16 Write Multiple Registers request (encoding form with borrowed register slice).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteMultipleRegistersRequest<'a> {
     pub start_address: u16,
@@ -217,6 +225,7 @@ impl<'a> WriteMultipleRegistersRequest<'a> {
     }
 }
 
+/// FC22 Mask Write Register request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MaskWriteRegisterRequest {
     pub address: u16,
@@ -234,6 +243,7 @@ impl MaskWriteRegisterRequest {
     }
 }
 
+/// FC23 Read/Write Multiple Registers request (encoding form).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadWriteMultipleRegistersRequest<'a> {
     pub read_start_address: u16,
@@ -272,6 +282,48 @@ impl<'a> ReadWriteMultipleRegistersRequest<'a> {
     }
 }
 
+/// FC07 Read Exception Status request (no payload).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadExceptionStatusRequest;
+
+impl ReadExceptionStatusRequest {
+    pub fn encode(&self, w: &mut Writer<'_>) -> Result<(), EncodeError> {
+        w.write_u8(FunctionCode::ReadExceptionStatus.as_u8())?;
+        Ok(())
+    }
+}
+
+/// FC08 Diagnostics request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiagnosticsRequest {
+    pub sub_function: u16,
+    pub data: u16,
+}
+
+impl DiagnosticsRequest {
+    pub fn encode(&self, w: &mut Writer<'_>) -> Result<(), EncodeError> {
+        w.write_u8(FunctionCode::Diagnostics.as_u8())?;
+        w.write_be_u16(self.sub_function)?;
+        w.write_be_u16(self.data)?;
+        Ok(())
+    }
+}
+
+/// FC24 Read FIFO Queue request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadFifoQueueRequest {
+    pub fifo_pointer_address: u16,
+}
+
+impl ReadFifoQueueRequest {
+    pub fn encode(&self, w: &mut Writer<'_>) -> Result<(), EncodeError> {
+        w.write_u8(FunctionCode::ReadFifoQueue.as_u8())?;
+        w.write_be_u16(self.fifo_pointer_address)?;
+        Ok(())
+    }
+}
+
+/// A request with a user-defined or unrecognised function code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CustomRequest<'a> {
     pub function_code: u8,
@@ -326,6 +378,7 @@ impl<'a> WriteMultipleRegistersRequestData<'a> {
     }
 }
 
+/// Borrowed decode representation for FC23 payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadWriteMultipleRegistersRequestData<'a> {
     pub read_start_address: u16,
@@ -346,6 +399,7 @@ impl<'a> ReadWriteMultipleRegistersRequestData<'a> {
     }
 }
 
+/// Borrowed decode representation for custom/unknown function codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CustomRequestData<'a> {
     pub function_code: u8,
@@ -386,7 +440,9 @@ impl OwnedWriteMultipleRegistersRequest {
     }
 }
 
+/// Modbus request PDU, ready for encoding. Used by the client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Request<'a> {
     ReadCoils(ReadCoilsRequest),
     ReadDiscreteInputs(ReadDiscreteInputsRequest),
@@ -398,6 +454,9 @@ pub enum Request<'a> {
     WriteMultipleRegisters(WriteMultipleRegistersRequest<'a>),
     MaskWriteRegister(MaskWriteRegisterRequest),
     ReadWriteMultipleRegisters(ReadWriteMultipleRegistersRequest<'a>),
+    ReadExceptionStatus(ReadExceptionStatusRequest),
+    Diagnostics(DiagnosticsRequest),
+    ReadFifoQueue(ReadFifoQueueRequest),
     Custom(CustomRequest<'a>),
 }
 
@@ -414,6 +473,9 @@ impl<'a> Request<'a> {
             Self::WriteMultipleRegisters(req) => req.encode(w),
             Self::MaskWriteRegister(req) => req.encode(w),
             Self::ReadWriteMultipleRegisters(req) => req.encode(w),
+            Self::ReadExceptionStatus(req) => req.encode(w),
+            Self::Diagnostics(req) => req.encode(w),
+            Self::ReadFifoQueue(req) => req.encode(w),
             Self::Custom(req) => req.encode(w),
         }
     }
@@ -430,6 +492,9 @@ impl<'a> Request<'a> {
             Self::WriteMultipleRegisters(_) => FunctionCode::WriteMultipleRegisters,
             Self::MaskWriteRegister(_) => FunctionCode::MaskWriteRegister,
             Self::ReadWriteMultipleRegisters(_) => FunctionCode::ReadWriteMultipleRegisters,
+            Self::ReadExceptionStatus(_) => FunctionCode::ReadExceptionStatus,
+            Self::Diagnostics(_) => FunctionCode::Diagnostics,
+            Self::ReadFifoQueue(_) => FunctionCode::ReadFifoQueue,
             Self::Custom(req) => FunctionCode::Custom(req.function_code),
         }
     }
@@ -437,6 +502,7 @@ impl<'a> Request<'a> {
 
 /// Decoded request model used by simulator/server implementations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DecodedRequest<'a> {
     ReadCoils(ReadCoilsRequest),
     ReadDiscreteInputs(ReadDiscreteInputsRequest),
@@ -448,6 +514,9 @@ pub enum DecodedRequest<'a> {
     WriteMultipleRegisters(WriteMultipleRegistersRequestData<'a>),
     MaskWriteRegister(MaskWriteRegisterRequest),
     ReadWriteMultipleRegisters(ReadWriteMultipleRegistersRequestData<'a>),
+    ReadExceptionStatus(ReadExceptionStatusRequest),
+    Diagnostics(DiagnosticsRequest),
+    ReadFifoQueue(ReadFifoQueueRequest),
     Custom(CustomRequestData<'a>),
 }
 
@@ -464,6 +533,9 @@ impl<'a> DecodedRequest<'a> {
             Self::WriteMultipleRegisters(_) => FunctionCode::WriteMultipleRegisters,
             Self::MaskWriteRegister(_) => FunctionCode::MaskWriteRegister,
             Self::ReadWriteMultipleRegisters(_) => FunctionCode::ReadWriteMultipleRegisters,
+            Self::ReadExceptionStatus(_) => FunctionCode::ReadExceptionStatus,
+            Self::Diagnostics(_) => FunctionCode::Diagnostics,
+            Self::ReadFifoQueue(_) => FunctionCode::ReadFifoQueue,
             Self::Custom(req) => FunctionCode::Custom(req.function_code),
         }
     }
@@ -590,6 +662,20 @@ impl<'a> DecodedRequest<'a> {
                         values_bytes,
                     },
                 ))
+            }
+            FunctionCode::ReadExceptionStatus => {
+                Ok(Self::ReadExceptionStatus(ReadExceptionStatusRequest))
+            }
+            FunctionCode::Diagnostics => {
+                let sub_function = r.read_be_u16()?;
+                let data = r.read_be_u16()?;
+                Ok(Self::Diagnostics(DiagnosticsRequest { sub_function, data }))
+            }
+            FunctionCode::ReadFifoQueue => {
+                let fifo_pointer_address = r.read_be_u16()?;
+                Ok(Self::ReadFifoQueue(ReadFifoQueueRequest {
+                    fifo_pointer_address,
+                }))
             }
             FunctionCode::Custom(function_code) => {
                 let data = r.read_exact(r.remaining())?;

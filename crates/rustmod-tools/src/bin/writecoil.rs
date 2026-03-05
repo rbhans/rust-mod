@@ -1,4 +1,5 @@
 use clap::Parser;
+use rustmod_client::UnitId;
 use rustmod_tools::common::{TcpConnectionArgs, build_client, init_tracing, parse_bool};
 
 #[derive(Debug, Parser)]
@@ -21,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = build_client(&args.conn).await?;
 
     client
-        .write_single_coil(args.unit_id, args.address, args.value)
+        .write_single_coil(UnitId::new(args.unit_id), args.address, args.value)
         .await?;
 
     println!("wrote coil {} => {}", args.address, args.value);

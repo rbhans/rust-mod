@@ -4,7 +4,7 @@ use rustmod_core::pdu::{
     ReadHoldingRegistersRequest, Request, Response, WriteMultipleCoilsRequest,
     WriteMultipleRegistersRequest,
 };
-use rustmod_core::{DecodeError, EncodeError};
+use rustmod_core::{DecodeError, EncodeError, UnitId};
 
 const READ_HOLDING_REQ: &[u8] = &[0x03, 0x00, 0x6B, 0x00, 0x03];
 const READ_HOLDING_RESP: &[u8] = &[0x03, 0x06, 0x02, 0x2B, 0x00, 0x00, 0x00, 0x64];
@@ -45,7 +45,7 @@ fn fc03_response_decode_and_helpers() {
 fn mbap_frame_roundtrip() {
     let mut buf = [0u8; 32];
     let mut w = Writer::new(&mut buf);
-    frame::tcp::encode_frame(&mut w, 1, 1, READ_HOLDING_REQ).unwrap();
+    frame::tcp::encode_frame(&mut w, 1, UnitId::new(1), READ_HOLDING_REQ).unwrap();
     assert_eq!(w.as_written(), TCP_READ_HOLDING);
 
     let mut r = Reader::new(w.as_written());
@@ -53,7 +53,7 @@ fn mbap_frame_roundtrip() {
     assert_eq!(header.transaction_id, 1);
     assert_eq!(header.protocol_id, 0);
     assert_eq!(header.length, 6);
-    assert_eq!(header.unit_id, 1);
+    assert_eq!(header.unit_id, UnitId::new(1));
     assert_eq!(pdu, READ_HOLDING_REQ);
 }
 
@@ -61,7 +61,7 @@ fn mbap_frame_roundtrip() {
 fn rtu_frame_crc_tamper_detected() {
     let mut buf = [0u8; 32];
     let mut w = Writer::new(&mut buf);
-    frame::rtu::encode_frame(&mut w, 1, READ_HOLDING_REQ).unwrap();
+    frame::rtu::encode_frame(&mut w, UnitId::new(1), READ_HOLDING_REQ).unwrap();
 
     let mut tampered = w.as_written().to_vec();
     tampered[2] ^= 0x01;

@@ -8,22 +8,27 @@ pub struct Writer<'a> {
 }
 
 impl<'a> Writer<'a> {
+    /// Create a writer over the given mutable byte slice.
     pub fn new(buf: &'a mut [u8]) -> Self {
         Self { buf, pos: 0 }
     }
 
+    /// Number of bytes written so far.
     pub const fn position(&self) -> usize {
         self.pos
     }
 
+    /// Number of bytes remaining in the buffer.
     pub fn remaining(&self) -> usize {
         self.buf.len().saturating_sub(self.pos)
     }
 
+    /// View the bytes written so far.
     pub fn as_written(&self) -> &[u8] {
         &self.buf[..self.pos]
     }
 
+    /// Write a single byte.
     pub fn write_u8(&mut self, value: u8) -> Result<(), EncodeError> {
         if self.remaining() < 1 {
             return Err(EncodeError::BufferTooSmall);
@@ -33,6 +38,7 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
+    /// Write a byte slice.
     pub fn write_all(&mut self, data: &[u8]) -> Result<(), EncodeError> {
         if self.remaining() < data.len() {
             return Err(EncodeError::BufferTooSmall);
@@ -43,6 +49,7 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
+    /// Write a big-endian `u16`.
     pub fn write_be_u16(&mut self, value: u16) -> Result<(), EncodeError> {
         self.write_all(&value.to_be_bytes())
     }
